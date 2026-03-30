@@ -39,8 +39,8 @@
 
 #### Cenário 2: Com ALB (Evolução)
 - **Database (RDS):** `bia-db`
-- **Application Load Balancer:** `bia-alb`
-- **EC2 (ECS Cluster):** `bia-ec2`
+- **Application Load Balancer:** `bia-dev-alb`
+- **EC2 (ECS Cluster):** `bia-dev`
 
 ## Regras de Security Groups
 
@@ -54,13 +54,13 @@
 - **Porta:** 5432 (PostgreSQL)
 - **Sources:** 
   - `bia-dev` → Descrição: "acesso vindo de bia-dev"
-  - `bia-ec2` (quando com ALB) → Descrição: "acesso vindo de bia-ec2"
+  - `bia-dev` (quando com ALB) → Descrição: "acesso vindo de bia-dev"
   - `bia-web` (quando sem ALB) → Descrição: "acesso vindo de bia-web"
 
-### EC2 com ALB (bia-ec2)
+### EC2 com ALB (bia-dev)
 **Inbound Rules:**
 - **Protocolo:** All TCP
-- **Source:** `bia-alb` → Descrição: "acesso vindo de bia-alb"
+- **Source:** `bia-dev-alb` → Descrição: "acesso vindo de bia-alb"
 - **Motivo:** Portas aleatórias do ECS Service
 
 ### Application Load Balancer (bia-alb)

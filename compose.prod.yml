@@ -1,0 +1,46 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: always
+    ports:
+      - "3001:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: .
+      args:
+        VITE_API_URL: https://100.31.242.214
+    container_name: bia
+    restart: always
+    depends_on:
+      - database
+    environment:
+      PORT: 8080
+      VERSAO_API: 4.2.0
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PWD: postgres
+      DB_NAME: bia
+      IS_LOCAL: false
+
+  database:
+    image: postgres:17.1
+    container_name: database
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bia
+    ports:
+      - "5433:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+
+volumes:
+  db:

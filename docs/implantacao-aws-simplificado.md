@@ -1,271 +1,218 @@
-# Implantação AWS Simplificada — BIA
+# Implantação AWS — BIA
 
-Arquitetura simples com uma instância EC2 rodando dois containers Docker (app + banco), ECR para versionamento de imagens, Load Balancer e Route 53 para DNS.
+> Atualizado em: 30/03/2026
+> Conta AWS: `395120012447` | Região: `us-east-1`
+> Aplicação: <https://bia.uira.com.br>
 
 ---
 
 ## Visão Geral
 
-```
+```text
 Internet
    │
    ▼
 Route 53 (bia.uira.com.br → ALB)
    │
    ▼
-Application Load Balancer (porta 80)
+ALB bia-dev-alb (HTTPS :443 → :8080)
    │
    ▼
-Target Group (porta 3001)
-   │
-   ▼
-EC2 Instance
-   ├── Container: app (porta 3001)
-   └── Container: postgresql (porta 5432)
+EC2 bia-dev (i-0977cdff42c104d9c — 100.31.242.214)
+   ├── Container: server (Node.js :8080)
+   ├── Container: nginx  (:3001 → :8080)
+   └── Container: database (PostgreSQL 17.1 :5432)
 
-ECR ──► EC2 (pull das imagens)
+ECR (395120012447.dkr.ecr.us-east-1.amazonaws.com/bia)
+  └──► EC2 (pull das imagens via CodePipeline)
 ```
 
 ---
 
-## 1. ECR — Elastic Container Registry
+## Recursos AWS Provisionados
 
-Repositório para versionar a imagem Docker do app.
-
-### Criar repositório
-
-```bash
-aws ecr create-repository \
-  --repository-name bia-app \
-  --region us-east-1
-```
-
-### Autenticar e fazer push da imagem
-
-```bash
-# Autenticar no ECR
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin \
-    <account-id>.dkr.ecr.us-east-1.amazonaws.com
-
-# Build e tag da imagem
-docker build -t bia-app .
-docker tag bia-app:latest \
-  <account-id>.dkr.ecr.us-east-1.amazonaws.com/bia-app:latest
-
-# Push
-docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/bia-app:latest
-```
-
-> Substitua `<account-id>` pelo ID da sua conta AWS.
+| Recurso | Nome / ID / Valor |
+| --- | --- |
+| EC2 | `bia-dev` — `i-0977cdff42c104d9c` — IP: `100.31.242.214` |
+| Security Group | `bia-alb-sg` — `sg-03f8e153b1b17a0cf` |
+| VPC | `vpc-0570a35b2c53a3eb5` |
+| Subnet | `subnet-02c4e497903f0f6df` (us-east-1a) |
+| ECR | `395120012447.dkr.ecr.us-east-1.amazonaws.com/bia` |
+| ALB | `bia-dev-alb` |
+| Target Group | `bia-alb-sg` — porta `8080` — health check `/api/versao` |
+| Certificado ACM | `794c923a-d826-44d8-9117-3a93b4aa8b1a` — `bia.uira.com.br` |
+| Hosted Zone | `uira.com.br` |
 
 ---
 
-## 2. EC2 — Instância com Docker
-
-### Configuração mínima recomendada
-
-| Parâmetro       | Valor sugerido        |
-|-----------------|-----------------------|
-| Tipo            | `t3.small`            |
-| SO              | Amazon Linux 2023     |
-| Armazenamento   | 20 GB gp3             |
-| Security Group  | Portas 22, 80, 3001   |
-
-### Security Group — regras de entrada
-
-| Tipo  | Porta | Origem         |
-|-------|-------|----------------|
-| SSH   | 22    | Seu IP         |
-| HTTP  | 80    | 0.0.0.0/0      |
-| Custom| 3001  | Security Group do ALB |
-
-### Instalar Docker na EC2
+## 1. ECR — Publicar imagem Docker
 
 ```bash
-sudo yum update -y
-sudo yum install -y docker
-sudo service docker start
-sudo usermod -aG docker ec2-user
+# Autenticar Docker no ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  395120012447.dkr.ecr.us-east-1.amazonaws.com
 
-# Instalar docker-compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-  -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+# Build e push da imagem
+docker build -t bia:latest .
+docker tag bia:latest 395120012447.dkr.ecr.us-east-1.amazonaws.com/bia:latest
+docker push 395120012447.dkr.ecr.us-east-1.amazonaws.com/bia:latest
 ```
 
-### IAM Role para EC2 acessar o ECR
+---
 
-Crie uma IAM Role com a policy `AmazonEC2ContainerRegistryReadOnly` e associe à instância EC2.
+## 2. EC2 bia-dev — Deploy via Docker Compose
 
-### docker-compose.yml na EC2
-
-```yaml
-version: "3.8"
-
-services:
-  db:
-    image: postgres:16-alpine
-    container_name: bia-db
-    restart: always
-    environment:
-      POSTGRES_USER: bia
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: bia
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - bia-net
-
-  app:
-    image: <account-id>.dkr.ecr.us-east-1.amazonaws.com/bia-app:latest
-    container_name: bia-app
-    restart: always
-    ports:
-      - "3001:3001"
-    environment:
-      DATABASE_URL: postgresql://bia:${DB_PASSWORD}@db:5432/bia
-      NODE_ENV: production
-    depends_on:
-      - db
-    networks:
-      - bia-net
-
-volumes:
-  pgdata:
-
-networks:
-  bia-net:
-```
-
-### Arquivo .env na EC2
+### Conectar na instância
 
 ```bash
-# /home/ec2-user/.env
-DB_PASSWORD=senha_segura_aqui
+ssh -i bia-dev-key-pair.pem ec2-user@100.31.242.214
 ```
 
 ### Subir os containers
 
 ```bash
-# Autenticar no ECR (necessário antes do pull)
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin \
-    <account-id>.dkr.ecr.us-east-1.amazonaws.com
-
-# Subir os containers
-docker-compose --env-file .env up -d
-
-# Verificar status
-docker-compose ps
-docker-compose logs -f app
+cd /opt/bia
+git pull origin main
+docker compose -f compose.prod.yml up --build -d
 ```
 
----
-
-## 3. Application Load Balancer (ALB)
-
-### Criar o ALB
-
-1. **EC2 → Load Balancers → Create Load Balancer**
-2. Selecionar: **Application Load Balancer**
-3. Configurações:
-   - Nome: `bia-alb`
-   - Scheme: `Internet-facing`
-   - IP type: `IPv4`
-   - Subnets: selecionar ao menos 2 subnets públicas
-
-### Listener
-
-| Protocolo | Porta | Ação          |
-|-----------|-------|---------------|
-| HTTP      | 80    | Forward → Target Group `bia-tg` |
-
----
-
-## 4. Target Group
-
-### Criar o Target Group
-
-1. **EC2 → Target Groups → Create target group**
-2. Configurações:
-
-| Parâmetro           | Valor         |
-|---------------------|---------------|
-| Target type         | Instances     |
-| Nome                | `bia-tg`      |
-| Protocolo           | HTTP          |
-| Porta               | **3001**      |
-| VPC                 | Mesma da EC2  |
-
-3. **Health Check:**
-   - Protocol: HTTP
-   - Path: `/health` (ou `/` se não houver rota de health check)
-   - Healthy threshold: 2
-   - Interval: 30s
-
-4. **Registrar a instância EC2** no target group.
-
----
-
-## 5. Route 53 — DNS
-
-### Pré-requisito
-
-O domínio `uira.com.br` deve estar configurado no Route 53 (Hosted Zone criada).
-
-### Criar registro DNS
-
-1. **Route 53 → Hosted Zones → uira.com.br → Create Record**
-2. Configurações:
-
-| Campo          | Valor                        |
-|----------------|------------------------------|
-| Record name    | `bia`                        |
-| Record type    | `A`                          |
-| Alias          | **Sim**                      |
-| Alias target   | DNS do ALB (`bia-alb-xxx.us-east-1.elb.amazonaws.com`) |
-| Routing policy | Simple                       |
-
-Resultado: `bia.uira.com.br` → ALB → EC2:3001
-
----
-
-## 6. Fluxo de Deploy (atualizar a aplicação)
+### Rodar migrations
 
 ```bash
-# 1. Na máquina de desenvolvimento — build e push da nova imagem
-docker build -t bia-app .
-docker tag bia-app:latest \
-  <account-id>.dkr.ecr.us-east-1.amazonaws.com/bia-app:latest
-docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/bia-app:latest
+docker compose exec server bash -c 'npx sequelize db:migrate'
+```
 
-# 2. Na EC2 — pull e restart do container
-ssh ec2-user@<ec2-ip>
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin \
-    <account-id>.dkr.ecr.us-east-1.amazonaws.com
-docker-compose pull app
-docker-compose up -d --no-deps app
+### Verificar aplicação
+
+```bash
+curl http://localhost:8080/api/versao
+# Esperado: {"versao":"4.2.0"}
+```
+
+### Security Group — regras de entrada
+
+| Tipo | Porta | Origem |
+| --- | --- | --- |
+| SSH | 22 | Seu IP |
+| HTTPS | 443 | 0.0.0.0/0 |
+| HTTP | 80 | 0.0.0.0/0 (redirect → HTTPS) |
+| Custom TCP | 8080 | `bia-alb-sg` (tráfego do ALB) |
+
+---
+
+## 3. ALB bia-dev-alb
+
+| Parâmetro | Valor |
+| --- | --- |
+| Scheme | Internet-facing |
+| Listener 80 | Redirect → HTTPS 443 |
+| Listener 443 | Forward → Target Group `bia-alb-sg` |
+| Certificado | ACM `794c923a-d826-44d8-9117-3a93b4aa8b1a` |
+
+### Verificar status
+
+```bash
+aws elbv2 describe-load-balancers --names bia-dev-alb --region us-east-1
 ```
 
 ---
 
-## 7. Resumo dos Recursos AWS
+## 4. Target Group bia-alb-sg
 
-| Recurso        | Nome/Detalhe                        |
-|----------------|-------------------------------------|
-| ECR            | `bia-app`                           |
-| EC2            | `t3.small`, Amazon Linux 2023       |
-| IAM Role       | `ec2-ecr-readonly` (ECR pull)       |
-| ALB            | `bia-alb` — porta 80                |
-| Target Group   | `bia-tg` — porta 3001               |
-| Route 53       | `bia.uira.com.br` → ALB (Alias A)   |
+| Parâmetro | Valor |
+| --- | --- |
+| Target type | instance |
+| Protocolo | HTTP |
+| Porta | 8080 |
+| Health check path | `/api/versao` |
+| Healthy threshold | 2 |
+| Interval | 30s |
+
+### Verificar saúde da instância
+
+```bash
+aws elbv2 describe-target-health \
+  --target-group-arn $(aws elbv2 describe-target-groups --names bia-alb-sg \
+    --query 'TargetGroups[0].TargetGroupArn' --output text --region us-east-1) \
+  --region us-east-1
+```
+
+---
+
+## 5. Certificado ACM
+
+```bash
+aws acm describe-certificate \
+  --certificate-arn arn:aws:acm:us-east-1:395120012447:certificate/794c923a-d826-44d8-9117-3a93b4aa8b1a \
+  --region us-east-1
+```
+
+Status esperado: `ISSUED` | Domínio: `bia.uira.com.br`
+
+---
+
+## 6. Route 53
+
+Registro `bia.uira.com.br` — tipo **A (Alias)** apontando para o ALB `bia-dev-alb`.
+
+```bash
+aws route53 list-resource-record-sets \
+  --hosted-zone-id $(aws route53 list-hosted-zones-by-name \
+    --dns-name uira.com.br --query 'HostedZones[0].Id' --output text) \
+  --query "ResourceRecordSets[?Name=='bia.uira.com.br.']"
+```
+
+---
+
+## 7. Fluxo de Deploy Automatizado (CodePipeline)
+
+A cada `git push` na branch `main`, o pipeline executa automaticamente:
+
+```text
+git push main
+  → CodePipeline bia-pipeline
+      → Stage Source:  GitHub checkout
+      → Stage Build:   CodeBuild bia-build
+                         → docker build
+                         → docker push ECR (bia:latest + bia:COMMIT_HASH)
+                         → gera imagedefinitions.json
+      → Stage Deploy:  ECS rolling update (cluster bia-cluster / service bia-service)
+```
+
+### Disparar deploy manualmente
+
+```bash
+aws codepipeline start-pipeline-execution --name bia-pipeline --region us-east-1
+```
+
+### Verificar estado do pipeline
+
+```bash
+aws codepipeline get-pipeline-state --name bia-pipeline --region us-east-1
+```
+
+---
+
+## 8. Validação Final
+
+```bash
+# HTTP redireciona para HTTPS
+curl -I http://bia.uira.com.br
+# Esperado: 301/302 → https://
+
+# HTTPS responde com 200
+curl -I https://bia.uira.com.br
+
+# API respondendo
+curl https://bia.uira.com.br/api/versao
+# Esperado: {"versao":"4.2.0"}
+```
 
 ---
 
 ## Observações
 
-- O banco PostgreSQL roda no mesmo host da aplicação (sem RDS), adequado para ambiente de desenvolvimento ou uso simples.
-- Para produção com maior disponibilidade, considere migrar o banco para o **RDS** e usar **ECS** ou **Elastic Beanstalk** para o app.
-- Para HTTPS, adicione um listener na porta 443 no ALB com certificado via **AWS Certificate Manager (ACM)**.
+- O banco PostgreSQL roda em container no mesmo host da aplicação (sem RDS). Adequado para o estágio atual de aprendizado.
+- Para maior disponibilidade em produção, considere migrar o banco para **RDS** e adicionar **CloudFront** na frente do ALB.
+- Secrets Manager não é utilizado neste estágio — as credenciais do banco são passadas via variáveis de ambiente no `compose.prod.yml`.
