@@ -1,0 +1,49 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: .
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    container_name: bia
+    depends_on:
+      - database
+    environment:
+      DB_USER: ${DB_USER}
+      DB_PWD: ${DB_PWD}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_SECRET_NAME: ${DB_SECRET_NAME}
+      DB_REGION: ${DB_REGION}
+      IS_LOCAL: ${IS_LOCAL}
+      DEBUG_SECRET: ${DEBUG_SECRET}
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8080/api/versao"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 5s
+
+  database:
+    image: postgres:17.1
+    container_name: database
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PWD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - ${DB_LOCAL_PORT}:5432
+    volumes:
+      - db:/var/lib/postgresql/data
+
+volumes:
+  db:

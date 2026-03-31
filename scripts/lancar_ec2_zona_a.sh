@@ -1,9 +1,9 @@
 vpc_id=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text)
 subnet_id=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$vpc_id Name=availabilityZone,Values=us-east-1a --query "Subnets[0].SubnetId" --output text)
-security_group_id=$(aws ec2 describe-security-groups --group-names "bia-dev" --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
+security_group_id=$(aws ec2 describe-security-groups --group-names "http-bia-sg" --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
 
 if [ -z "$security_group_id" ]; then
-    echo ">[ERRO] Security group bia-dev não foi criado na VPC $vpc_id"
+    echo ">[ERRO] Security group http-bia-sg não foi criado na VPC $vpc_id"
     exit 1
 fi
 
